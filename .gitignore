@@ -9,6 +9,7 @@
 .terraform/*
 .venv/
 __pycache__/
+incident-agent.env
 .vs/
 .vscode/
 *.iml

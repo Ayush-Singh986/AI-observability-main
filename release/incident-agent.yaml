@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: incident-agent-config
+  namespace: online-boutique
+data:
+  KUBERNETES_NAMESPACE: online-boutique
+  ES_DEPLOYMENT_INDEX: jenkins-deployments
+  AI_BASE_URL: https://api.openai.com/v1
+  AI_MODEL: gpt-4o-mini
+  GITHUB_API_URL: https://api.github.com
+  GITHUB_OWNER: Ayush-Singh986
+  GITHUB_REPOSITORY: AI-observability-main
+  GITHUB_BASE_BRANCH: main
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-agent
+  namespace: online-boutique
+  labels:
+    app: incident-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: incident-agent
+  template:
+    metadata:
+      labels:
+        app: incident-agent
+    spec:
+      serviceAccountName: incident-agent
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: incident-agent
+          image: ${INCIDENT_AGENT_IMAGE}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          envFrom:
+            - configMapRef:
+                name: incident-agent-config
+          env:
+            - name: ES_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: incident-agent-secrets
+                  key: ES_ENDPOINT
+            - name: ES_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: incident-agent-secrets
+                  key: ES_API_KEY
+            - name: AI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: incident-agent-secrets
+                  key: AI_API_KEY
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: incident-agent-secrets
+                  key: GITHUB_TOKEN
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

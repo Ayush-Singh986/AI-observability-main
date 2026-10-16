@@ -1,8 +1,10 @@
 # AWS and Jenkins Setup
 
-This guide deploys the Online Boutique demonstration to Amazon EKS. Jenkins mirrors the public demonstration images into Amazon ECR, applies the rendered Kubernetes manifest, waits for the Deployments to become ready, and records the deployment attempt and its outcome in Elasticsearch. Failed rollouts are indexed too, so the incident history can be correlated with the change that caused them.
+This guide deploys the Online Boutique demonstration and a read-only incident watcher to Amazon EKS. Jenkins mirrors the public demonstration images into Amazon ECR, builds and deploys the watcher, applies the rendered application manifest, waits for the Deployments to become ready, and records the deployment attempt and its outcome in Elasticsearch. Failed rollouts are indexed too, so the incident history can be correlated with the change that caused them.
 
 The checked-out repository does not contain the microservice source code or Dockerfiles. The Jenkins pipeline therefore mirrors the public sample images listed in `release/image-sources.txt`; it does not build the services from source. Those upstream sample images currently include public Google Artifact Registry references, used only as the migration source; the deployed pods pull from ECR. To remove that last Google registry dependency, replace those source entries with images from a registry you control or add the application source and build definitions. The application manifest uses ECR image placeholders and must be rendered by the pipeline before applying it.
+
+The incident watcher continuously watches pod status changes in the `online-boutique` namespace, reads the affected container's recent logs, and correlates them with Jenkins deployment records and an OpenAI-compatible chat API. For a sufficiently confident `OOMKilled` diagnosis, it can open a **draft GitHub pull request** proposing only a memory request/limit increase in the affected Deployment. It has Kubernetes read-only permissions and cannot modify or restart production pods. Other issue types are diagnosed and logged but do not currently produce a code-change PR.
 
 ## Architecture
 
@@ -14,21 +16,26 @@ flowchart LR
     subgraph AWS["AWS account"]
         Jenkins -->|mirror tagged images| ECR[Amazon ECR]
         Jenkins -->|apply rendered manifest| EKS[Amazon EKS]
+        EKS --> Watcher[Read-only incident watcher]
         ECR -->|pull images| EKS
         EKS --> Boutique[Online Boutique services]
+        Boutique -->|pod events and logs| Watcher
         Boutique --> OTel[OpenTelemetry collectors]
     end
 
     OTel -->|logs and metrics over OTLP| Telemetry[(Elastic logs and metrics)]
     Jenkins -->|deployment outcome| Deployments[(jenkins-deployments)]
-    Telemetry --> Agent[Elastic Agent Builder]
+    Watcher -->|recent deployment history| Deployments
+    Watcher -->|sanitized context| AI[OpenAI-compatible chat API]
+    Watcher -->|draft PR for review only| Git
+    Telemetry --> Agent[Optional Elastic Agent Builder]
     Deployments --> Agent
     Engineer[Engineer in Kibana] --> Agent
 ```
 
 ## Prerequisites
 
-Use an AWS account with permission to create VPC, EKS, ECR, and IAM resources. Install AWS CLI v2, Terraform 1.5 or later, Docker, kubectl, Helm, Python 3, Git, and a Jenkins controller with a Linux agent labelled `aws-jenkins`. The Jenkins agent must have AWS CLI, Docker, kubectl, and Python 3 installed.
+Use an AWS account with permission to create VPC, EKS, ECR, and IAM resources. Install AWS CLI v2, Terraform 1.5 or later, Docker, kubectl, Helm, Python 3, Git, and a Jenkins controller with a Linux agent labelled `aws-jenkins`. The Jenkins agent must have AWS CLI, Docker, kubectl, and Python 3 installed. You also need an OpenAI-compatible chat-completions endpoint and a GitHub fine-grained token for the target repository.
 
 Authenticate to AWS with IAM Identity Center or another short-lived credential method. Do not put AWS access keys, Elastic API keys, or passwords in this repository.
 
@@ -61,6 +68,12 @@ kubectl create namespace online-boutique
 
 The cluster creator receives administrative access from the Terraform module. Use that administrator context only for initial cluster setup and platform components.
 
+Bootstrap the incident watcher ServiceAccount and read-only RoleBinding with the cluster administrator. This is intentionally separate from the Jenkins deployment identity:
+
+```bash
+kubectl apply -f release/incident-agent-rbac.yaml
+```
+
 ## 2. Configure Jenkins
 
 Create a Jenkins multibranch pipeline pointing at this repository and configure its Linux agent with the `aws-jenkins` label. The agent instance profile provides AWS authentication; no static AWS keys are required. The Jenkins agent needs permission to run Docker commands and should have network access to EKS, ECR, and the public source image registries.
@@ -75,6 +88,29 @@ Add two Jenkins **Secret text** credentials:
 The multibranch pipeline deploys only the `main` branch. Its default parameters are `AWS_REGION=us-east-1` and `EKS_CLUSTER_NAME=blame-the-deploy`; change the build parameters if Terraform used different values.
 
 The image-mirroring stage reads the source references in `release/image-sources.txt`, pushes them to the `online-boutique` ECR repository, and substitutes the real ECR registry hostname into a generated manifest under `build/`. It does not modify the checked-in template. A source image that is unavailable or cannot be pulled causes the pipeline to fail rather than silently deploying a mixed set of registries.
+
+Before running Jenkins for the first time, create a Kubernetes Secret for the watcher. The fine-grained GitHub token should be limited to this repository with **Contents: read and write**, **Pull requests: read and write**, and **Metadata: read** permissions. Protect `main` with required human review and status checks. The watcher creates draft PRs only; it does not merge them.
+
+Create a temporary local environment file without putting values directly in shell history:
+
+```bash
+umask 077
+cat > incident-agent.env <<'EOF'
+ES_ENDPOINT=https://<YOUR-ELASTICSEARCH-ENDPOINT>
+ES_API_KEY=<INDEX-READ-ONLY-ELASTIC-API-KEY>
+AI_API_KEY=<OPENAI-COMPATIBLE-API-KEY>
+GITHUB_TOKEN=<FINE-GRAINED-REPOSITORY-TOKEN>
+EOF
+
+kubectl create secret generic incident-agent-secrets \
+  --namespace online-boutique \
+  --from-env-file=incident-agent.env
+rm incident-agent.env
+```
+
+Use an Elasticsearch API key that can only search `jenkins-deployments`. The OpenAI-compatible endpoint and model are set in `release/incident-agent.yaml` as `AI_BASE_URL` and `AI_MODEL`; change these values to match your provider before deploying. The watcher sends redacted, bounded log excerpts plus deployment metadata to that provider. Review your provider's data-handling terms before sending production logs outside AWS, and do not enable this integration if your logs contain data that must not leave your environment.
+
+The Jenkins deployment identity can update resources in the application namespace, but the incident watcher's Kubernetes ServiceAccount is separately bound to a Role that only reads and watches pods and reads pod logs. Do not grant the watcher write verbs or cluster-admin permissions.
 
 ## 3. Configure the public frontend
 
@@ -115,7 +151,7 @@ helm upgrade --install opentelemetry-kube-stack \
   --version 0.12.4
 ```
 
-Confirm the collector pods are ready and verify in Elasticsearch that the expected Kubernetes logs and metadata arrive. A collector installation alone does not guarantee that every OOM event is available to the agent; validate the actual event fields before writing an Elasticsearch query for them.
+Confirm the collector pods are ready and verify in Elasticsearch that the expected Kubernetes logs and metadata arrive. A collector installation alone does not guarantee that every OOM event is available to the agent; validate the actual event fields before relying on an Elasticsearch query for them.
 
 ## 5. Create the deployment-history index
 
@@ -146,13 +182,14 @@ Use an API key with only the required index privileges. Jenkins deployment histo
 
 ## 6. Run and verify the deployment
 
-Push a change to the `main` branch or run the Jenkins multibranch scan. Jenkins validates its tools and input files, authenticates to ECR using its instance role, mirrors the images, renders the manifest, applies it to the `online-boutique` namespace, waits for each Deployment rollout, and writes the deployment outcome to Elasticsearch.
+Push a change to the `main` branch or run the Jenkins multibranch scan. Jenkins validates its tools and input files, authenticates to ECR using its instance role, mirrors the application images, builds the incident watcher image, applies its read-only RBAC and Deployment, applies the application manifest, waits for each Deployment rollout, and writes the deployment outcome to Elasticsearch.
 
 Check application health:
 
 ```bash
 kubectl get deployments,pods,services -n online-boutique
 kubectl get service frontend-external -n online-boutique
+kubectl logs deployment/incident-agent -n online-boutique --follow
 ```
 
 Check Elasticsearch for the new deployment event:
@@ -165,6 +202,8 @@ curl --fail-with-body '<YOUR-ES-ENDPOINT>/jenkins-deployments/_search?pretty' \
 ```
 
 In Kibana, configure Agent Builder query tools to retrieve recent failure telemetry from `logs-*` and recent releases from `jenkins-deployments`. The agent can compare service and timestamp fields, then explain which deployment is a likely cause. It should cite the commit and telemetry it used; it cannot prove causation if the required event was not collected.
+
+The incident watcher also runs its own narrow diagnosis flow. It watches live pod state changes, examines the previous container logs when available, queries recent deployment history, and asks the configured chat model for a structured diagnosis. It can open a draft PR only when the pod reports `OOMKilled`, the model confidence is at least `0.70`, and the suggested memory values pass strict limits. The PR changes only the affected container's memory request and limit, never the running cluster. Check `kubectl logs deployment/incident-agent -n online-boutique` for diagnoses and draft PR links. `ImagePullBackOff`, configuration errors, and other failures are reported in logs but require a human-created fix.
 
 To demonstrate an incident, make a temporary change to the payment service’s memory request and limit in `release/kubernetes-manifests.yaml`, push it to `main`, and observe the pod’s restart state and collected telemetry. Revert the change after demonstrating diagnosis. Do not perform the failure exercise in a shared or production cluster.
 

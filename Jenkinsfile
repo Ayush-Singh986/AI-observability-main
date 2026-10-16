@@ -17,6 +17,7 @@ pipeline {
     environment {
         KUBERNETES_NAMESPACE = 'online-boutique'
         RENDERED_MANIFEST = 'build/kubernetes-manifests.yaml'
+        INCIDENT_AGENT_MANIFEST = 'build/incident-agent.yaml'
         DEPLOYMENT_ATTEMPTED = 'false'
     }
 
@@ -31,7 +32,12 @@ pipeline {
                     command -v python3
                     test -f release/kubernetes-manifests.yaml
                     test -f release/image-sources.txt
-                    python3 -m py_compile scripts/mirror-images-to-ecr.py scripts/index-deployment.py
+                    python3 -m py_compile \
+                      scripts/mirror-images-to-ecr.py \
+                      scripts/index-deployment.py \
+                      scripts/publish-incident-agent.py \
+                      scripts/render-incident-agent.py \
+                      scripts/incident-agent.py
                 '''
             }
         }
@@ -69,6 +75,23 @@ pipeline {
             }
         }
 
+        stage('Build and render incident watcher') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    env.INCIDENT_AGENT_IMAGE = "${env.ECR_REGISTRY}/online-boutique:incident-agent-${env.GIT_COMMIT.substring(0, 12)}"
+                }
+                sh '''
+                    set -eu
+                    python3 scripts/publish-incident-agent.py
+                    python3 scripts/render-incident-agent.py \
+                      release/incident-agent.yaml "$INCIDENT_AGENT_MANIFEST"
+                '''
+            }
+        }
+
         stage('Deploy to Amazon EKS') {
             when {
                 branch 'main'
@@ -82,12 +105,21 @@ pipeline {
                     kubectl apply --dry-run=client \
                       --namespace "$KUBERNETES_NAMESPACE" \
                       --filename "$RENDERED_MANIFEST"
+                    kubectl apply --dry-run=client \
+                      --namespace "$KUBERNETES_NAMESPACE" \
+                      --filename "$INCIDENT_AGENT_MANIFEST"
                 '''
                 script {
                     env.DEPLOYMENT_ATTEMPTED = 'true'
                 }
                 sh '''
                     set -eu
+                    kubectl apply \
+                      --namespace "$KUBERNETES_NAMESPACE" \
+                      --filename "$INCIDENT_AGENT_MANIFEST"
+                    kubectl rollout status deployment/incident-agent \
+                      --namespace "$KUBERNETES_NAMESPACE" \
+                      --timeout=5m
                     kubectl apply \
                       --namespace "$KUBERNETES_NAMESPACE" \
                       --filename "$RENDERED_MANIFEST"

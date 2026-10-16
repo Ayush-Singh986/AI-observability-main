@@ -23,6 +23,7 @@ locals {
     "adservice-",
     "redis-",
     "busybox-",
+    "incident-agent-",
   ]
 }
 
