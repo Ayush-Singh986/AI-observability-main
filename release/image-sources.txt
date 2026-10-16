@@ -1,0 +1,13 @@
+currencyservice-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/currencyservice:v0.10.5
+busybox-latest busybox:latest
+loadgenerator-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/loadgenerator:v0.10.5
+productcatalogservice-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/productcatalogservice:v0.10.5
+checkoutservice-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/checkoutservice:v0.10.5
+shippingservice-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/shippingservice:v0.10.5
+cartservice-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/cartservice:v0.10.5
+redis-alpine redis:alpine
+emailservice-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/emailservice:v0.10.5
+paymentservice-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/paymentservice:v0.10.5
+frontend-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/frontend:v0.10.5
+recommendationservice-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/recommendationservice:v0.10.5
+adservice-v0.10.5 us-central1-docker.pkg.dev/google-samples/microservices-demo/adservice:v0.10.5
