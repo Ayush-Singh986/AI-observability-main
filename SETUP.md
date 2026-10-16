@@ -48,6 +48,32 @@ git clone https://github.com/Ayush-Singh986/AI-observability-main.git
 Set-Location AI-observability-main
 ```
 
+### Quick guide to the project files
+
+Start with [README.md](./README.md) for the project overview and this setup guide to deploy it. These are the main files you will use:
+
+| File | What it does |
+| --- | --- |
+| [Jenkinsfile](./Jenkinsfile) | Runs the build and deployment steps when Jenkins builds the `main` branch. |
+| [Terraform main.tf](./.github/terraform/main.tf) | Creates the AWS network, EKS cluster, ECR repository, and Jenkins access role. |
+| [Terraform variables.tf](./.github/terraform/variables.tf) | Sets the cluster, AWS region, node sizes, and allowed API IP addresses. |
+| [Terraform outputs.tf](./.github/terraform/outputs.tf) | Prints useful values such as the cluster name and Jenkins instance profile. |
+| [Terraform versions.tf](./.github/terraform/versions.tf) | Sets the required Terraform and AWS provider versions. |
+| [release/kubernetes-manifests.yaml](./release/kubernetes-manifests.yaml) | Defines the sample store services that Jenkins deploys to Kubernetes. |
+| [release/image-sources.txt](./release/image-sources.txt) | Lists the public images Jenkins copies into Amazon ECR. |
+| [release/incident-agent.yaml](./release/incident-agent.yaml) | Defines the incident watcher and its non-secret settings. |
+| [release/incident-agent-rbac.yaml](./release/incident-agent-rbac.yaml) | Gives the watcher permission to read pod status and logs, but not change pods. |
+| [incident-agent/Dockerfile](./incident-agent/Dockerfile) | Packages the Python watcher into a container image. |
+| [incident-agent/requirements.txt](./incident-agent/requirements.txt) | Lists Python packages needed by the watcher. |
+| [scripts/mirror-images-to-ecr.py](./scripts/mirror-images-to-ecr.py) | Copies the sample images into ECR and creates a deployable manifest. |
+| [scripts/publish-incident-agent.py](./scripts/publish-incident-agent.py) | Builds and uploads the watcher image to ECR. |
+| [scripts/render-incident-agent.py](./scripts/render-incident-agent.py) | Adds the ECR image address to the watcher deployment file. |
+| [scripts/incident-agent.py](./scripts/incident-agent.py) | Watches for pod problems, gathers evidence, and can open a draft fix PR. |
+| [scripts/index-deployment.py](./scripts/index-deployment.py) | Records Jenkins deployment results in Elasticsearch. |
+| [tests/test_incident_agent.py](./tests/test_incident_agent.py) | Checks the watcher’s incident handling and safety rules. |
+
+Other files help explain or maintain the project: [.github/terraform/README.md](./.github/terraform/README.md) describes the AWS infrastructure, and [.github/workflows/README.md](./.github/workflows/README.md) explains the workflow folder. Deployment is run by the root [Jenkinsfile](./Jenkinsfile), not a GitHub Actions workflow. [.gitignore](./.gitignore) and [.dockerignore](./.dockerignore) keep generated or unnecessary files out of Git and container builds.
+
 For AWS IAM Identity Center authentication, configure a profile once, log in, and confirm the identity before provisioning:
 
 ```powershell
