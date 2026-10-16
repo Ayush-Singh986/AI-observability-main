@@ -144,6 +144,94 @@ This repository still does not contain the Online Boutique service source or Doc
 
 The observability configuration must be checked against real data. If Kubernetes OOM status is not present in the collected logs, the collector configuration or query must be adjusted to capture an appropriate signal. The agent should not be presented as finding an event that was never collected.
 
+## Step-by-step AWS deployment
+
+This quick start provisions the AWS infrastructure and deploys the application through the checked-in Jenkins pipeline. The commands below use **Windows PowerShell**. The full [AWS and Jenkins setup guide](./SETUP.md) covers prerequisites, Jenkins installation and credentials, secure watcher secrets, the AWS Load Balancer Controller, OpenTelemetry, and Elasticsearch configuration.
+
+### 1. Install tools and authenticate
+
+Install AWS CLI v2, Terraform, kubectl, Git, and PowerShell. Docker and Python 3 are required on the Linux Jenkins agent. Sign in to AWS with IAM Identity Center (SSO); use an AWS identity authorized to provision the Terraform resources:
+
+```powershell
+aws configure sso --profile boutique-admin
+aws sso login --profile boutique-admin
+$env:AWS_PROFILE = "boutique-admin"
+aws sts get-caller-identity
+```
+
+Clone the repository if needed, then run the remaining commands from its root:
+
+```powershell
+git clone https://github.com/Ayush-Singh986/AI-observability-main.git
+Set-Location AI-observability-main
+```
+
+### 2. Provision EKS, ECR, and Jenkins access
+
+The Terraform configuration creates the VPC, EKS cluster, ECR repository, and an IAM instance profile for Jenkins agents. Enter a trusted administrator public IP when prompted. Do not use `0.0.0.0/0` for the EKS API allowlist.
+
+```powershell
+$AwsRegion = "us-east-1"
+$ClusterName = "blame-the-deploy"
+$TrustedPublicIp = Read-Host "Trusted administrator public IPv4 address (without /32)"
+Push-Location .github\terraform
+terraform init
+terraform validate
+terraform plan -out=tfplan `
+  -var="aws_region=$AwsRegion" `
+  -var="cluster_name=$ClusterName" `
+  -var="cluster_endpoint_public_access_cidrs=[`"$TrustedPublicIp/32`"]"
+terraform apply tfplan
+$ClusterName = terraform output -raw cluster_name
+$AwsRegion = terraform output -raw aws_region
+$JenkinsInstanceProfile = terraform output -raw jenkins_instance_profile_name
+Pop-Location
+```
+
+Keep the Terraform state private; it contains infrastructure details and must not be committed. Attach the Terraform-created instance profile to the Jenkins EC2 agent, and ensure the agent can reach EKS, ECR, and the public image registries. If the agent already has an instance profile, replace it rather than associating a second one. The setup guide explains both cases.
+
+### 3. Connect to the cluster and prepare its namespace
+
+Use the AWS identity that created the cluster for initial administrator setup:
+
+```powershell
+aws eks update-kubeconfig --region $AwsRegion --name $ClusterName
+kubectl get nodes
+kubectl create namespace online-boutique --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f release\incident-agent-rbac.yaml
+```
+
+### 4. Configure Jenkins and project credentials
+
+Create a Jenkins **Multibranch Pipeline** for this repository and configure a Linux agent labeled `aws-jenkins` with AWS CLI v2, Docker, kubectl, and Python 3. The Jenkinsfile deploys only the `main` branch. Set its `AWS_REGION` and `EKS_CLUSTER_NAME` parameters to the values above, and use the EC2 instance profile for AWS authentication instead of static AWS keys.
+
+Before the first build, configure the two Elasticsearch Secret Text credentials `elastic-endpoint` and `elastic-api-key` in Jenkins, and create the Kubernetes secret `incident-agent-secrets` for the watcher. Install the AWS Load Balancer Controller before expecting an internet-facing frontend, and install OpenTelemetry and configure Elasticsearch if you want telemetry and incident correlation. Follow the corresponding step-by-step commands in [SETUP.md](./SETUP.md); do not commit credentials to Git.
+
+### 5. Deploy and verify
+
+Push a reviewed change to `main` or trigger a scan/build of the `main` branch in Jenkins. The pipeline mirrors the sample images into ECR, builds and publishes the incident watcher, applies the Kubernetes manifests, waits for rollouts, and records the deployment result in Elasticsearch.
+
+Check the deployment from a PowerShell window with access to the cluster:
+
+```powershell
+kubectl get deployments,pods,services --namespace online-boutique
+kubectl rollout status deployment/incident-agent --namespace online-boutique --timeout=5m
+kubectl get service frontend-external --namespace online-boutique
+kubectl logs deployment/incident-agent --namespace online-boutique --follow
+```
+
+The frontend's external address is available after the AWS Load Balancer Controller provisions its load balancer. To remove the demo when finished, delete the namespace and destroy the Terraform resources; this removes billable AWS infrastructure and the ECR repository:
+
+```powershell
+kubectl delete namespace online-boutique
+Push-Location .github\terraform
+terraform destroy `
+  -var="aws_region=$AwsRegion" `
+  -var="cluster_name=$ClusterName" `
+  -var="cluster_endpoint_public_access_cidrs=[`"$TrustedPublicIp/32`"]"
+Pop-Location
+```
+
 ## How I would close the interview explanation
 
 “The main design decision was to keep the responsibilities clear. EKS runs the services, Jenkins mirrors versioned images into ECR and deploys the Kubernetes configuration, OpenTelemetry sends runtime evidence to Elasticsearch, and Jenkins records each deployment attempt and its outcome. The AI assistant queries both sources to help an engineer connect a symptom to a likely change. The result is a realistic example of CI/CD, Kubernetes observability, and AI-assisted incident investigation on AWS.”
