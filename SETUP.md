@@ -207,6 +207,13 @@ The incident watcher also runs its own narrow diagnosis flow. It watches live po
 
 To demonstrate an incident, make a temporary change to the payment service’s memory request and limit in `release/kubernetes-manifests.yaml`, push it to `main`, and observe the pod’s restart state and collected telemetry. Revert the change after demonstrating diagnosis. Do not perform the failure exercise in a shared or production cluster.
 
+## Project efficiency, achievements, and results
+
+- **Automated delivery:** Jenkins validates the deployment inputs, mirrors application images to ECR, deploys to EKS, waits for rollouts, and records both successful and failed deployment attempts in Elasticsearch.
+- **Incident investigation:** The watcher correlates pod status, recent logs, and deployment history. For a sufficiently confident `OOMKilled` diagnosis, it can propose a bounded memory change in a draft pull request for human review; it cannot modify running workloads.
+- **Test result:** The incident-watcher unit suite passed **9 of 9 tests (100%)** in the local verification run. This measures the checked-in unit tests only, not production reliability or overall project completion.
+- **Efficiency measurement:** No before-and-after incident-resolution times, deployment durations, cost measurements, or production results are recorded in this repository. Therefore, a time-savings or overall-efficiency percentage cannot be stated reliably. Measure investigation time over comparable incidents before and after deployment to calculate that percentage.
+
 ## 7. Remove the demo infrastructure
 
 The cluster, EC2 worker nodes, NAT gateway, and load balancer incur AWS charges. Destroying this Terraform configuration also deletes the ECR repository and its mirrored images. When the demo is no longer needed, first remove the Kubernetes workloads and load balancer, then destroy the Terraform-managed resources:
